@@ -7,5 +7,4 @@ runs/
 outputs/*
 !outputs/.gitkeep
 
-monroe/
 optuna_runs/
