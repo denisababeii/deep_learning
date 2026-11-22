@@ -176,7 +176,7 @@ def main(cfg):
             if train[t].nunique() != 2 or val[t].nunique() != 2:
                 raise ValueError(f'{t} needs both classes in train and validation; revise split')
     config = cfg_dict(cfg)
-    packages = ['torch', 'atom-jepa', 'rdkit', 'numpy', 'pandas', 'scikit-learn', 'hydra-core',
+    packages = ['torch', 'atom-jepa', 'monroe', 'torch-geometric', 'datamol', 'rdkit', 'numpy', 'pandas', 'scikit-learn', 'hydra-core',
                 'descriptastorus', 'lightgbm']
     config.update(targets=targets, output_dir=str(out),
                   versions={k: importlib.metadata.version(k) for k in packages},

@@ -1,0 +1,25 @@
+# @package _global_
+
+defaults:
+  - override /readout: mlp
+
+model:
+  name: monroe
+  type: monroe
+
+  # Pretrained monroe checkpoint
+  checkpoint: third_party/Monroe/checkpoint
+
+  freeze_encoder: false
+
+  # Lr
+  encoder_lr: 1.0e-5
+  readout_lr: 1.0e-3
+
+  num_workers: 4
+
+train:
+  epochs: 20
+  batch_size: 4
+  weight_decay: 1.0e-4
+  grad_clip: 1.0
