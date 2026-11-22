@@ -1,0 +1,38 @@
+/zhome/69/c/223730/.lsbatch/1794422912.30008337: line 8: finetune.shTASK=regression: No such file or directory
+
+------------------------------------------------------------
+Sender: LSF System <lsfadmin@hpc.dtu.dk>
+Subject: Job 30008337: <NONAME> in cluster <dcc> Exited
+
+Job <NONAME> was submitted from host <n-62-30-4> by user <s253528> in cluster <dcc> at Wed Nov 11 19:48:32 2026
+Job was executed on host(s) <n-62-31-5>, in queue <hpc>, as user <s253528> in cluster <dcc> at Wed Nov 11 19:48:34 2026
+</zhome/69/c/223730> was used as the home directory.
+</dtu/blackhole/12/223730/dtu-cyp-project> was used as the working directory.
+Started at Wed Nov 11 19:48:34 2026
+Terminated at Wed Nov 11 19:48:35 2026
+Results reported at Wed Nov 11 19:48:35 2026
+
+Your job looked like:
+
+------------------------------------------------------------
+# LSBATCH: User input
+OVERRIDES=readout=mlp train.batch_size=16 train.epochs=500, "TASK=regression < finetune.shTASK=regression"
+------------------------------------------------------------
+
+Exited with exit code 1.
+
+Resource usage summary:
+
+    CPU time :                                   0.04 sec.
+    Max Memory :                                 -
+    Average Memory :                             -
+    Total Requested Memory :                     1024.00 MB
+    Delta Memory :                               -
+    Max Swap :                                   -
+    Max Processes :                              -
+    Max Threads :                                -
+    Run time :                                   0 sec.
+    Turnaround time :                            3 sec.
+
+The output (if any) is above this job summary.
+
