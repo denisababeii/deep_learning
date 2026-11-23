@@ -8,18 +8,32 @@ from models.readouts import build_readout
 
 
 class Conformers(Dataset):
-    def __init__(self, frame, folder, targets):
+    def __init__(self, frame, folder, targets, mode="train"):
         self.frame, self.folder = frame.reset_index(drop=True), folder
         self.y = frame.reindex(columns=targets).to_numpy(dtype=np.float32)
+        self.mode = mode
 
     def __len__(self):
-        return len(self.frame)
+        if self.mode == "train":
+            return len(self.frame)  # for training, one conformer is randomly sampled per molecule
+        else:
+            return len(self.frame) * 10 # during evaluation, all 10 conformers are used per molecule
 
     def __getitem__(self, i):
-        with np.load(self.folder / f'{self.frame.iloc[i].key}.npz') as d:
-            return {'atomic_numbers': torch.tensor(d['z'], dtype=torch.long),
-                    'node_coordinates': torch.tensor(d['pos'], dtype=torch.float32),
-                    'y': torch.tensor(self.y[i])}
+        if self.mode == "train":
+            random_conformer = np.random.randint(10) # sample randomly one of the 10 conformers for each molecule
+            with np.load(self.folder / f'{self.frame.iloc[i].key}_{random_conformer}.npz') as d:
+                return {'atomic_numbers': torch.tensor(d['z'], dtype=torch.long),
+                        'node_coordinates': torch.tensor(d['pos'], dtype=torch.float32),
+                        'y': torch.tensor(self.y[i])}
+        else:
+            # molecule index and conformer index are computed from the dataset index
+            molecule_idx = i // 10 # one molecule contains 10 conformers
+            conformer_idx = i % 10 # conformers are saved with i from 0 to 9
+            with np.load(self.folder / f'{self.frame.iloc[molecule_idx].key}_{conformer_idx}.npz') as d:
+                return {'atomic_numbers': torch.tensor(d['z'], dtype=torch.long),
+                        'node_coordinates': torch.tensor(d['pos'], dtype=torch.float32),
+                        'y': torch.tensor(self.y[molecule_idx])}
 
 
 class AtomJEPAModel(nn.Module):
@@ -28,11 +42,8 @@ class AtomJEPAModel(nn.Module):
         self.cfg, self.folder = cfg, data_dir / 'conformers'
         self.encoder = AtomJEPA.from_pretrained(cfg.checkpoint, device=device,
                                                 precision=cfg.precision, cuequivariance=False)
-        #self.encoder.set_grad_checkpointing(not cfg.freeze_encoder)
-        #self.encoder.requires_grad_(not cfg.freeze_encoder)
-        self.encoder_frozen = cfg.freeze_encoder
-        self.encoder.set_grad_checkpointing(not self.encoder_frozen)
-        self.encoder.requires_grad_(not self.encoder_frozen)
+        self.encoder.set_grad_checkpointing(not cfg.freeze_encoder)
+        self.encoder.requires_grad_(not cfg.freeze_encoder)
         self.readout = build_readout(readout, self.encoder.embedding_dim, n_targets).to(self.encoder.device)
 
     @property
@@ -41,23 +52,15 @@ class AtomJEPAModel(nn.Module):
 
     def train(self, mode=True):
         super().train(mode)
-        if self.encoder_frozen:
+        if self.cfg.freeze_encoder:
             self.encoder.eval()
         return self
-
-    def set_encoder_frozen(self, frozen):
-        self.encoder_frozen = frozen
-        self.encoder.requires_grad_(not frozen)
-        self.encoder.set_grad_checkpointing(not frozen)
-
-        if frozen:
-            self.encoder.eval()
 
     def fit_preprocessing(self, train):
         pass
 
-    def loader(self, frame, targets, batch_size, shuffle=False):
-        return DataLoader(Conformers(frame, self.folder, targets), batch_size=batch_size,
+    def loader(self, frame, targets, batch_size, shuffle=False, mode="train"):
+        return DataLoader(Conformers(frame, self.folder, targets, mode=mode), batch_size=batch_size,
                           shuffle=shuffle, collate_fn=self.encoder.collate, num_workers=0)
 
     def param_groups(self):
@@ -68,4 +71,3 @@ class AtomJEPAModel(nn.Module):
 
     def forward(self, batch):
         return self.readout(self.encoder(batch))  # Differentiable forward; do NOT use encoder.embed().
-

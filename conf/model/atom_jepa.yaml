@@ -18,3 +18,4 @@ train:
   batch_size: 8
   weight_decay: 1.0e-4
   grad_clip: 1.0
+  l2sp_alpha: 0.01

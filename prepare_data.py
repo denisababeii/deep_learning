@@ -30,9 +30,14 @@ def conformer(job):
         return key, ''
     try:
         # Use the original SMILES and the upstream defaults, without retries or centering.
-        sample = smiles_to_samples(smiles, num_conformers=1, seed=seed, mmff_max_iters=500)[0]
-        np.savez_compressed(path, z=sample['atomic_numbers'].numpy(),
-                            pos=sample['node_coordinates'].numpy())
+        # sample = smiles_to_samples(smiles, num_conformers=1, seed=seed, mmff_max_iters=500)[0]
+        # np.savez_compressed(path, z=sample['atomic_numbers'].numpy(),
+        #                     pos=sample['node_coordinates'].numpy())
+        samples = smiles_to_samples(smiles, num_conformers=10, seed=seed, mmff_max_iters=500)
+        for i in range(len(samples)):
+            sample = samples[i]
+            path = Path(folder) / f'{key}_{i}.npz'
+            np.savez_compressed(path, z=sample['atomic_numbers'].numpy(), pos=sample['node_coordinates'].numpy())
         return key, ''
     except Exception as exc:
         return key, str(exc)

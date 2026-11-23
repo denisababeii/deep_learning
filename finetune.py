@@ -20,15 +20,19 @@ from models import MODELS
 from models.gbm import LightGBMModel
 from prepare_data import REG, CLS
 
+from l2sp_regularization import L2SP
 
-def masked_loss(pred, y, task, mean, std):
+
+def masked_loss(model, pred, y, task, mean, std, l2sp):
     mask = torch.isfinite(y)
     if not mask.any():
         return None
     # Index BEFORE applying the loss: multiplying NaN losses by zero is not safe.
     if task == 'regression':
         return nn.functional.mse_loss(pred[mask], ((y - mean) / std)[mask])
-    return nn.functional.binary_cross_entropy_with_logits(pred[mask], y[mask])
+    bce_loss = nn.functional.binary_cross_entropy_with_logits(pred[mask], y[mask])
+    return bce_loss + l2sp(model)
+
 
 
 def metrics(frame, predictions, targets, task):
@@ -76,6 +80,7 @@ def predict(model, loader, task, mean, std):
     values = np.concatenate(out)
     if not np.isfinite(values).all():
         raise RuntimeError('Nonfinite predictions')
+    values = np.stack([values[i:i+10].mean(axis=0) for i in range(0, len(values), 10)])  # average over the 10 conformers per molecule
     return values
 
 
@@ -84,6 +89,8 @@ def train_torch(cfg, train, val, targets, task, data, out):
     if cfg.train.epochs < 1 or cfg.train.batch_size < 1:
         raise ValueError('epochs and batch_size must be positive')
     model = MODELS[cfg.model.type](cfg.model, cfg.readout, len(targets), data, cfg.device)
+    initial_weights = [param.data.clone() for param in model.parameters()]
+    l2sp = L2SP(initial_weights, alpha=cfg.train.l2sp_alpha)
     model.fit_preprocessing(train)  # Feature scaling etc. is fitted on the training split ONLY.
     mean = torch.zeros(len(targets), device=model.device)
     std = torch.ones_like(mean)
@@ -93,23 +100,16 @@ def train_torch(cfg, train, val, targets, task, data, out):
         std = torch.tensor(train[targets].std(ddof=0).to_numpy(), dtype=torch.float32,
                            device=model.device).clamp_min(1e-6)
     batch_size = cfg.train.batch_size
-    train_loader = model.loader(train, targets, batch_size, shuffle=True)
-    val_loader = model.loader(val, targets, batch_size)
+    train_loader = model.loader(train, targets, batch_size, shuffle=True, mode="train")
+    val_loader = model.loader(val, targets, batch_size, mode="eval")
     optimizer = torch.optim.AdamW(model.param_groups(), weight_decay=cfg.train.weight_decay)
     best = float('inf')
     for epoch in range(1, cfg.train.epochs + 1):
-        if (cfg.model.freeze_encoder and cfg.model.freeze_epochs > 0 and epoch == cfg.model.freeze_epochs + 1):
-            model.set_encoder_frozen(False)
-            optimizer.add_param_group({
-                'params': list(model.encoder.parameters()),
-                'lr': cfg.model.encoder_lr,
-                'weight_decay': cfg.train.weight_decay,
-            })
         model.train()
         loss_sum, observed = 0., 0
         for batch in train_loader:
             y = batch['y'].to(model.device)
-            loss = masked_loss(model(batch).float(), y, task, mean, std)
+            loss = masked_loss(model, model(batch).float(), y, task, mean, std, l2sp)
             if loss is None:
                 continue
             if not torch.isfinite(loss):
@@ -139,7 +139,7 @@ def train_torch(cfg, train, val, targets, task, data, out):
     model.load_state_dict(saved['model'])
     mean, std = saved['mean'], saved['std']
     print(f'Best epoch: {saved["epoch"]}', flush=True)
-    return lambda frame: predict(model, model.loader(frame, targets, batch_size), task, mean, std)
+    return lambda frame: predict(model, model.loader(frame, targets, batch_size, mode="eval"), task, mean, std)
 
 
 def cfg_dict(cfg):
@@ -176,7 +176,7 @@ def main(cfg):
             if train[t].nunique() != 2 or val[t].nunique() != 2:
                 raise ValueError(f'{t} needs both classes in train and validation; revise split')
     config = cfg_dict(cfg)
-    packages = ['torch', 'atom-jepa', 'monroe', 'torch-geometric', 'datamol', 'rdkit', 'numpy', 'pandas', 'scikit-learn', 'hydra-core',
+    packages = ['torch', 'atom-jepa', 'rdkit', 'numpy', 'pandas', 'scikit-learn', 'hydra-core',
                 'descriptastorus', 'lightgbm']
     config.update(targets=targets, output_dir=str(out),
                   versions={k: importlib.metadata.version(k) for k in packages},
@@ -201,21 +201,19 @@ def main(cfg):
     vp[targets] = validation_predictions
     vp.to_csv(out / 'validation_predictions.csv', index=False)
     # Only now load and evaluate the held-out labelled test split.
-    if cfg.evaluate_test:
-        test = pd.read_csv(data / task / 'test.csv')
-        if not len(test):
-            raise ValueError('Empty test set')
-        if set(frame.canonical_smiles) & set(test.canonical_smiles):
-            raise ValueError('Exact molecule leakage into the test split')
-        predictions = predict_frame(test)
-        test_scores = metrics(test, predictions, targets, task)
-        (out / 'test_metrics.json').write_text(json.dumps(test_scores, indent=2))
-        # Classification exports probabilities; metrics use a fixed 0.5 threshold.
-        output = test[['SMILES', 'Molecule_Name']].copy()
-        output[targets] = predictions
-        output.to_csv(out / 'test_predictions.csv', index=False)
-        print(f'Held-out test metrics: {test_scores}')
+    test = pd.read_csv(data / task / 'test.csv')
+    if not len(test):
+        raise ValueError('Empty test set')
+    if set(frame.canonical_smiles) & set(test.canonical_smiles):
+        raise ValueError('Exact molecule leakage into the test split')
+    predictions = predict_frame(test)
+    test_scores = metrics(test, predictions, targets, task)
+    (out / 'test_metrics.json').write_text(json.dumps(test_scores, indent=2))
+    # Classification exports probabilities; metrics use a fixed 0.5 threshold.
+    output = test[['SMILES', 'Molecule_Name']].copy()
+    output[targets] = predictions
+    output.to_csv(out / 'test_predictions.csv', index=False)
+    print(f'Held-out test metrics: {test_scores}')
 
 if __name__ == '__main__':
     main()
-
