@@ -8,7 +8,7 @@ model:
   type: monroe
 
   # Pretrained monroe checkpoint
-  checkpoint: third_party/Monroe/checkpoint
+  checkpoint: monroe/Monroe/checkpoint
 
   freeze_encoder: false
 
