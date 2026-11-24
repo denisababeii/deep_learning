@@ -7,8 +7,10 @@ import importlib.metadata
 import json
 from pathlib import Path
 import random
+import time
 
 import hydra
+import joblib
 from hydra.core.hydra_config import HydraConfig
 import numpy as np
 from omegaconf import OmegaConf
@@ -17,7 +19,6 @@ import torch
 from torch import nn
 from sklearn.metrics import matthews_corrcoef, mean_absolute_error, r2_score, roc_auc_score, average_precision_score
 from models import MODELS
-from models.gbm import LightGBMModel
 from prepare_data import REG, CLS
 
 
@@ -85,6 +86,8 @@ def train_torch(cfg, train, val, targets, task, data, out):
         raise ValueError('epochs and batch_size must be positive')
     model = MODELS[cfg.model.type](cfg.model, cfg.readout, len(targets), data, cfg.device)
     model.fit_preprocessing(train)  # Feature scaling etc. is fitted on the training split ONLY.
+    if cfg.model.type == 'features':
+        joblib.dump(model.scaler, out / 'feature_scaler.joblib')
     mean = torch.zeros(len(targets), device=model.device)
     std = torch.ones_like(mean)
     if task == 'regression':
@@ -98,7 +101,8 @@ def train_torch(cfg, train, val, targets, task, data, out):
     optimizer = torch.optim.AdamW(model.param_groups(), weight_decay=cfg.train.weight_decay)
     best = float('inf')
     for epoch in range(1, cfg.train.epochs + 1):
-        if (cfg.model.freeze_encoder and cfg.model.freeze_epochs > 0 and epoch == cfg.model.freeze_epochs + 1):
+        if (cfg.model.type == 'atom_jepa' and cfg.model.freeze_encoder
+                and cfg.model.freeze_epochs > 0 and epoch == cfg.model.freeze_epochs + 1):
             model.set_encoder_frozen(False)
             optimizer.add_param_group({
                 'params': list(model.encoder.parameters()),
@@ -139,6 +143,11 @@ def train_torch(cfg, train, val, targets, task, data, out):
     model.load_state_dict(saved['model'])
     mean, std = saved['mean'], saved['std']
     print(f'Best epoch: {saved["epoch"]}', flush=True)
+    (out / 'selection.json').write_text(json.dumps({
+        'best_epoch': saved['epoch'],
+        'validation_selection_score': best if task == 'regression' else -best,
+        'primary_metric': 'macro_ST-RAE' if task == 'regression' else 'macro_MCC',
+    }, indent=2))
     return lambda frame: predict(model, model.loader(frame, targets, batch_size), task, mean, std)
 
 
@@ -148,6 +157,7 @@ def cfg_dict(cfg):
 
 @hydra.main(config_path='conf', config_name='config', version_base='1.3')
 def main(cfg):
+    started = time.perf_counter()
     if cfg.task not in ('regression', 'classification'):
         raise ValueError(f'Unknown task {cfg.task!r}')
     out = Path(HydraConfig.get().runtime.output_dir)
@@ -176,8 +186,13 @@ def main(cfg):
             if train[t].nunique() != 2 or val[t].nunique() != 2:
                 raise ValueError(f'{t} needs both classes in train and validation; revise split')
     config = cfg_dict(cfg)
-    packages = ['torch', 'atom-jepa', 'monroe', 'torch-geometric', 'datamol', 'rdkit', 'numpy', 'pandas', 'scikit-learn', 'hydra-core',
-                'descriptastorus', 'lightgbm']
+    packages = ['torch', 'atom-jepa', 'rdkit', 'numpy', 'pandas', 'scikit-learn', 'hydra-core']
+    if cfg.model.type in ('features', 'lightgbm'):
+        packages.append('descriptastorus')
+    if cfg.model.type == 'lightgbm':
+        packages.append('lightgbm')
+    if cfg.model.type == 'monroe':
+        packages.extend(['monroe', 'torch-geometric', 'datamol'])
     config.update(targets=targets, output_dir=str(out),
                   versions={k: importlib.metadata.version(k) for k in packages},
                   preparation=json.loads((data / 'manifest.json').read_text()),
@@ -189,6 +204,7 @@ def main(cfg):
     baseline = np.tile(train[targets].mean().to_numpy(), (len(val), 1))
     (out / 'baseline_metrics.json').write_text(json.dumps(metrics(val, baseline, targets, task), indent=2))
     if cfg.model.type == 'lightgbm':
+        from models.gbm import LightGBMModel
         model = LightGBMModel(cfg.model, data, cfg.seed)
         best = model.fit(train, val, targets, task, out)
         (out / 'best_iterations.json').write_text(json.dumps(best, indent=2))
@@ -200,6 +216,9 @@ def main(cfg):
     vp = val[['SMILES', 'Molecule_Name']].copy()
     vp[targets] = validation_predictions
     vp.to_csv(out / 'validation_predictions.csv', index=False)
+    (out / 'runtime.json').write_text(json.dumps({
+        'validation_runtime_seconds': time.perf_counter() - started,
+    }, indent=2))
     # Only now load and evaluate the held-out labelled test split.
     if cfg.evaluate_test:
         test = pd.read_csv(data / task / 'test.csv')

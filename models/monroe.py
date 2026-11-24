@@ -5,10 +5,6 @@ import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import Dataset
-from torch_geometric.loader import DataLoader
-
-from monroe.model.ckpt import load_ckpt
-from monroe.eval.embed import featurize_smiles, to_pyg
 
 from models.readouts import build_readout
 
@@ -33,6 +29,7 @@ class MonroeModel(nn.Module):
 
     def __init__(self, cfg, readout, n_targets, data_dir, device):
         super().__init__()
+        from monroe.model.ckpt import load_ckpt
 
         self.cfg = cfg
         self.graph_dir = Path(data_dir) / "monroe_graph_cache"
@@ -61,6 +58,7 @@ class MonroeModel(nn.Module):
         return self.graph_dir / f"{key}.npz"
 
     def _get_graphs(self, frame):
+        from monroe.eval.embed import featurize_smiles, to_pyg
 
         smiles_list = frame["SMILES"].astype(str).tolist()
 
@@ -125,6 +123,7 @@ class MonroeModel(nn.Module):
         pass
 
     def loader(self, frame, targets, batch_size, shuffle=False):
+        from torch_geometric.loader import DataLoader
 
         graphs = self._get_graphs(frame)
 
